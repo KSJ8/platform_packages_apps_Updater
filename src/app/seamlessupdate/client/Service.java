@@ -94,15 +94,9 @@ public class Service extends IntentService {
                 monitor.countDown();
             }
         });
-        if (SystemProperties.getBoolean("sys.update.streaming_test", false)) {
-            Log.d(TAG, "streaming update test");
-            final SharedPreferences preferences = Settings.getPreferences(this);
-            final String downloadFile = preferences.getString(PREFERENCE_DOWNLOAD_FILE, null);
-            engine.applyPayload(getString(R.string.url) + downloadFile, payloadOffset, 0, headerKeyValuePairs);
-        } else {
-            UPDATE_PATH.setReadable(true, false);
-            engine.applyPayload("file://" + UPDATE_PATH, payloadOffset, 0, headerKeyValuePairs);
-        }
+        final SharedPreferences preferences = Settings.getPreferences(this);
+        final String downloadFile = preferences.getString(PREFERENCE_DOWNLOAD_FILE, null);
+        engine.applyPayload(getString(R.string.url) + downloadFile, payloadOffset, 0, headerKeyValuePairs);
         try {
             monitor.await();
         } catch (InterruptedException e) {}
@@ -279,29 +273,21 @@ public class Service extends IntentService {
 
             final String incrementalUpdate = DEVICE + "-incremental-" + INCREMENTAL + "-" + targetIncremental + ".zip";
             final String fullUpdate = DEVICE + "-ota_update-" + targetIncremental + ".zip";
+            final String otaMetadata = DEVICE + "-ota_metadata-" + targetIncremental + ".zip";
 
-            if (incrementalUpdate.equals(downloadFile) || fullUpdate.equals(downloadFile)) {
-                Log.d(TAG, "resume fetch of " + downloadFile + " from " + downloaded + " bytes");
-                final HttpURLConnection connection = (HttpURLConnection) fetchData(downloadFile);
-                connection.setRequestProperty("Range", "bytes=" + downloaded + "-");
-                if (connection.getResponseCode() == HTTP_RANGE_NOT_SATISFIABLE) {
-                    Log.d(TAG, "download completed previously");
-                    onDownloadFinished(targetBuildDate, channel);
-                    return;
-                }
-                input = connection.getInputStream();
-            } else {
-                try {
-                    Log.d(TAG, "fetch incremental " + incrementalUpdate);
-                    downloadFile = incrementalUpdate;
-                    input = fetchData(downloadFile).getInputStream();
-                } catch (IOException e) {
-                    Log.d(TAG, "incremental not found, fetch full update " + fullUpdate);
-                    downloadFile = fullUpdate;
-                    input = fetchData(downloadFile).getInputStream();
-                }
-                downloaded = 0;
-                Files.deleteIfExists(UPDATE_PATH.toPath());
+            Log.d(TAG, "fetch metadata zip " + otaMetadata);
+            input = fetchData(otaMetadata).getInputStream();
+            downloaded = 0;
+            Files.deleteIfExists(UPDATE_PATH.toPath());
+
+            try {
+                Log.d(TAG, "fetch incremental " + incrementalUpdate);
+                downloadFile = incrementalUpdate;
+                fetchData(downloadFile).getInputStream();
+            } catch (IOException e) {
+                Log.d(TAG, "incremental not found, fetch full update " + fullUpdate);
+                downloadFile = fullUpdate;
+                fetchData(downloadFile).getInputStream();
             }
 
             final OutputStream output = new FileOutputStream(UPDATE_PATH, downloaded != 0);
