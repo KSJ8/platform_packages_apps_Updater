@@ -52,6 +52,7 @@ public class Service extends IntentService {
     static final File UPDATE_PATH = new File("/data/ota_package/update.zip");
     private static final String PREFERENCE_CHANNEL = "channel";
     private static final String PREFERENCE_DOWNLOAD_FILE = "download_file";
+    private static final String PREFERENCE_METADATA_FILE = "metadata_file";
     private static final int HTTP_RANGE_NOT_SATISFIABLE = 416;
 
     private boolean mUpdating = false;
@@ -71,6 +72,7 @@ public class Service extends IntentService {
         urlConnection.setReadTimeout(READ_TIMEOUT);
         return urlConnection;
     }
+
 
     private void applyUpdate(final long payloadOffset, final String[] headerKeyValuePairs) {
         final CountDownLatch monitor = new CountDownLatch(1);
@@ -94,15 +96,9 @@ public class Service extends IntentService {
                 monitor.countDown();
             }
         });
-        if (SystemProperties.getBoolean("sys.update.streaming_test", false)) {
-            Log.d(TAG, "streaming update test");
-            final SharedPreferences preferences = Settings.getPreferences(this);
-            final String downloadFile = preferences.getString(PREFERENCE_DOWNLOAD_FILE, null);
-            engine.applyPayload(getString(R.string.url) + downloadFile, payloadOffset, 0, headerKeyValuePairs);
-        } else {
-            UPDATE_PATH.setReadable(true, false);
-            engine.applyPayload("file://" + UPDATE_PATH, payloadOffset, 0, headerKeyValuePairs);
-        }
+        final SharedPreferences preferences = Settings.getPreferences(this);
+        final String downloadFile = preferences.getString(PREFERENCE_DOWNLOAD_FILE, null);
+        engine.applyPayload(getString(R.string.url) + downloadFile, payloadOffset, 0, headerKeyValuePairs);
         try {
             monitor.await();
         } catch (InterruptedException e) {}
@@ -275,14 +271,16 @@ public class Service extends IntentService {
             }
 
             String downloadFile = preferences.getString(PREFERENCE_DOWNLOAD_FILE, null);
+            String metadataFile = preferences.getString(PREFERENCE_METADATA_FILE, null);
             long downloaded = UPDATE_PATH.length();
 
             final String incrementalUpdate = DEVICE + "-incremental-" + INCREMENTAL + "-" + targetIncremental + ".zip";
             final String fullUpdate = DEVICE + "-ota_update-" + targetIncremental + ".zip";
+            final String otaMetadata = DEVICE + "-ota_metadata-" + targetIncremental + ".zip";
 
-            if (incrementalUpdate.equals(downloadFile) || fullUpdate.equals(downloadFile)) {
-                Log.d(TAG, "resume fetch of " + downloadFile + " from " + downloaded + " bytes");
-                final HttpURLConnection connection = (HttpURLConnection) fetchData(downloadFile);
+            if (otaMetadata.equals(metadataFile)) {
+                Log.d(TAG, "resume fetch of " + metadataFile + " from " + downloaded + " bytes");
+                final HttpURLConnection connection = (HttpURLConnection) fetchData(metadataFile);
                 connection.setRequestProperty("Range", "bytes=" + downloaded + "-");
                 if (connection.getResponseCode() == HTTP_RANGE_NOT_SATISFIABLE) {
                     Log.d(TAG, "download completed previously");
@@ -291,21 +289,26 @@ public class Service extends IntentService {
                 }
                 input = connection.getInputStream();
             } else {
-                try {
-                    Log.d(TAG, "fetch incremental " + incrementalUpdate);
-                    downloadFile = incrementalUpdate;
-                    input = fetchData(downloadFile).getInputStream();
-                } catch (IOException e) {
-                    Log.d(TAG, "incremental not found, fetch full update " + fullUpdate);
-                    downloadFile = fullUpdate;
-                    input = fetchData(downloadFile).getInputStream();
-                }
+                Log.d(TAG, "fetch metadata zip " + otaMetadata);
+                metadataFile = otaMetadata;
+                input = fetchData(metadataFile).getInputStream();
                 downloaded = 0;
                 Files.deleteIfExists(UPDATE_PATH.toPath());
             }
 
+            try {
+                Log.d(TAG, "fetch incremental " + incrementalUpdate);
+                downloadFile = incrementalUpdate;
+                fetchData(downloadFile).getInputStream();
+            } catch (IOException e) {
+                Log.d(TAG, "incremental not found, fetch full update " + fullUpdate);
+                downloadFile = fullUpdate;
+                fetchData(downloadFile).getInputStream();
+            }
+
             final OutputStream output = new FileOutputStream(UPDATE_PATH, downloaded != 0);
             preferences.edit().putString(PREFERENCE_DOWNLOAD_FILE, downloadFile).commit();
+            preferences.edit().putString(PREFERENCE_METADATA_FILE, metadataFile).commit();
 
             int bytesRead;
             long last = System.nanoTime();
